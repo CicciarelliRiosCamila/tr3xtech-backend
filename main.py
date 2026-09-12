@@ -1,4 +1,5 @@
 # main.py
+import carrito
 from fastapi import FastAPI, Depends, HTTPException
 from sqlalchemy.orm import Session
 
@@ -45,7 +46,7 @@ def login(datos: schemas.UsuarioLogin, db: Session = Depends(get_db)):
     usuario = db.query(models.Usuario).filter(models.Usuario.usuario == datos.usuario).first()
 
     # 2. Si no existe, O si la contraseña no coincide con el hash guardado, rechazamos.
-    # Ojo: usamos el MISMO mensaje de error en ambos casos (no decimos cuál de los dos
+    #  usamos el MISMO mensaje de error en ambos casos (no decimos cuál de los dos
     # está mal) para no darle pistas a alguien intentando adivinar usuarios válidos.
     if not usuario or not security.verificar_contrasena(datos.contrasena, usuario.contrasena_hash):
         raise HTTPException(status_code=401, detail="Usuario o contraseña incorrectos")
@@ -91,3 +92,75 @@ def listar_productos(
 @app.get("/productos/destacados", response_model=list[schemas.ProductoOut])
 def productos_destacados(db: Session = Depends(get_db)):
     return db.query(models.Producto).filter(models.Producto.destacado == True).all()
+@app.get("/carrito", response_model=schemas.CarritoOut)
+def ver_carrito(
+    db: Session = Depends(get_db),
+    usuario: models.Usuario = Depends(security.obtener_usuario_actual),
+):
+    carrito_crudo = carrito.obtener_carrito_crudo(usuario.id_usuario)
+
+    items_out = []
+    subtotal = 0.0
+
+    for id_producto, cantidad in carrito_crudo.items():
+        producto = db.query(models.Producto).filter(
+            models.Producto.id_producto == id_producto
+        ).first()
+
+        precio_unitario = float(producto.precio_venta)
+        subtotal_item = round(precio_unitario * cantidad, 2)
+        subtotal += subtotal_item
+
+        items_out.append(schemas.ItemCarritoOut(
+            id_producto=producto.id_producto,
+            nombre=producto.nombre,
+            precio_unitario=precio_unitario,
+            cantidad=cantidad,
+            subtotal_item=subtotal_item,
+        ))
+
+    return schemas.CarritoOut(
+        items=items_out,
+        subtotal=round(subtotal, 2),
+        envio=0.0,      # "a calcular"
+        descuento=0.0,
+        total=round(subtotal, 2),
+    )
+
+
+@app.post("/carrito/items", response_model=schemas.CarritoOut)
+def agregar_al_carrito(
+    datos: schemas.AgregarAlCarrito,
+    db: Session = Depends(get_db),
+    usuario: models.Usuario = Depends(security.obtener_usuario_actual),
+):
+    producto = db.query(models.Producto).filter(
+        models.Producto.id_producto == datos.id_producto
+    ).first()
+
+    if not producto:
+        raise HTTPException(status_code=404, detail="Producto no encontrado")
+
+    # RN02: no se puede agregar más unidades que el stock disponible
+    carrito_actual = carrito.obtener_carrito_crudo(usuario.id_usuario)
+    cantidad_total = carrito_actual.get(datos.id_producto, 0) + datos.cantidad
+
+    if cantidad_total > producto.stock:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Stock insuficiente. Disponible: {producto.stock}",
+        )
+
+    carrito.agregar_producto(usuario.id_usuario, datos.id_producto, datos.cantidad)
+
+    return ver_carrito(db, usuario)  # reusamos el endpoint anterior para devolver el carrito actualizado
+
+
+@app.delete("/carrito/items/{id_producto}", response_model=schemas.CarritoOut)
+def quitar_del_carrito(
+    id_producto: int,
+    db: Session = Depends(get_db),
+    usuario: models.Usuario = Depends(security.obtener_usuario_actual),
+):
+    carrito.quitar_producto(usuario.id_usuario, id_producto)
+    return ver_carrito(db, usuario)

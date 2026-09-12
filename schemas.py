@@ -52,3 +52,25 @@ class ProductoOut(BaseModel):
 
     class Config:
         from_attributes = True
+        # --- Schemas para el Carrito ---
+
+class AgregarAlCarrito(BaseModel):
+    id_producto: int
+    cantidad: int = 1  # si no se especifica, agrega 1 unidad por defecto
+
+
+class ItemCarritoOut(BaseModel):
+    id_producto: int
+    nombre: str
+    precio_unitario: float
+    cantidad: int
+    subtotal_item: float
+
+
+class CarritoOut(BaseModel):
+    # Esto refleja exactamente el panel RESUMEN de tu pantalla de Carrito
+    items: list[ItemCarritoOut]
+    subtotal: float
+    envio: float
+    descuento: float
+    total: float
