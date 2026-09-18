@@ -74,3 +74,33 @@ class CarritoOut(BaseModel):
     envio: float
     descuento: float
     total: float
+    # --- Schemas para el Checkout / Pedidos ---
+
+class ItemPedido(BaseModel):
+    id_producto: int
+    cantidad: int
+
+
+class CrearPedido(BaseModel):
+    metodo_pago: str  # "Crédito", "Débito", "Transferencia" o "Efectivo"
+
+
+class PedidoItemOut(BaseModel):
+    id_producto: int
+    cantidad: int
+    precio_unitario: float
+
+
+class PedidoOut(BaseModel):
+    id_pedido: int
+    id_usuario: int
+    subtotal: float
+    envio: float
+    descuento: float
+    total: float
+    metodo_pago: str
+    estado: str
+    items: list[PedidoItemOut]
+
+    class Config:
+        from_attributes = True

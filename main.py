@@ -164,3 +164,74 @@ def quitar_del_carrito(
 ):
     carrito.quitar_producto(usuario.id_usuario, id_producto)
     return ver_carrito(db, usuario)
+@app.post("/pedidos", response_model=schemas.PedidoOut)
+def finalizar_compra(
+    datos: schemas.CrearPedido,
+    db: Session = Depends(get_db),
+    usuario: models.Usuario = Depends(security.obtener_usuario_actual),
+):
+    # 1. Traemos el carrito actual del usuario (en memoria)
+    carrito_crudo = carrito.obtener_carrito_crudo(usuario.id_usuario)
+
+    # RN03: no se puede comprar con el carrito vacío
+    if not carrito_crudo:
+        raise HTTPException(status_code=400, detail="El carrito está vacío")
+
+    subtotal = 0.0
+    items_para_guardar = []  # vamos a ir juntando acá lo que después guardamos en PedidoItem
+
+    # 2. Revalidamos stock de cada producto (¡el porqué que charlamos antes!)
+    for id_producto, cantidad in carrito_crudo.items():
+        producto = db.query(models.Producto).filter(
+            models.Producto.id_producto == id_producto
+        ).first()
+
+        if not producto:
+            raise HTTPException(status_code=404, detail=f"Producto {id_producto} ya no existe")
+
+        if cantidad > producto.stock:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Stock insuficiente para '{producto.nombre}'. Disponible: {producto.stock}",
+            )
+
+        precio_unitario = float(producto.precio_venta)
+        subtotal += precio_unitario * cantidad
+        items_para_guardar.append((producto, cantidad, precio_unitario))
+
+    envio = 0.0       # "a calcular", según tu documento de diseño
+    descuento = 0.0
+    total = round(subtotal + envio - descuento, 2)
+
+    # 3. Creamos el Pedido (el registro permanente en la base de datos)
+    nuevo_pedido = models.Pedido(
+        id_usuario=usuario.id_usuario,
+        subtotal=round(subtotal, 2),
+        envio=envio,
+        descuento=descuento,
+        total=total,
+        metodo_pago=datos.metodo_pago,
+        estado="Pendiente",
+    )
+    db.add(nuevo_pedido)
+    db.flush()  # esto le asigna un id_pedido SIN cerrar todavía la operación,
+                # lo necesitamos para poder crear los PedidoItem de abajo
+
+    # 4. Creamos cada PedidoItem, y DESCONTAMOS el stock real
+    for producto, cantidad, precio_unitario in items_para_guardar:
+        item = models.PedidoItem(
+            id_pedido=nuevo_pedido.id_pedido,
+            id_producto=producto.id_producto,
+            cantidad=cantidad,
+            precio_unitario=precio_unitario,
+        )
+        db.add(item)
+        producto.stock -= cantidad  # RN02: se descuenta definitivamente
+
+    db.commit()
+    db.refresh(nuevo_pedido)
+
+    # 5. Vaciamos el carrito (RN05: se vacía al finalizar la compra)
+    carrito.vaciar_carrito(usuario.id_usuario)
+
+    return nuevo_pedido
